@@ -19,13 +19,30 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://127.0.0.1:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-init
+    depends_on:
+      - kafka
+    entrypoint: [ "/bin/bash", "-c" ]
+    command: |
+      "
+      echo 'Waiting for Kafka to be ready...'
+      sleep 15
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic raw_events    --partitions 3 --replication-factor 1 --config retention.ms=604800000
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic silver_events --partitions 3 --replication-factor 1 --config retention.ms=86400000
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic gold_output   --partitions 3 --replication-factor 1 --config retention.ms=259200000
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic late_events   --partitions 1 --replication-factor 1 --config retention.ms=86400000
+      echo 'Topics created!'
+      kafka-topics --bootstrap-server kafka:29092 --list
+      "
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -38,8 +55,21 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
 
+  producer:
+    build: ./producer
+    container_name: producer
+    depends_on:
+      - kafka
+    environment:
+      PYTHONUNBUFFERED: "1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET}
+      FAKER_MODE: ${FAKER_MODE:-false}
+    restart: on-failure
+
   flink-jobmanager:
-    image: flink:1.18.1-scala_2.12
+    build: ./flink-jobs
     container_name: flink-jobmanager
     ports:
       - "8081:8081"
@@ -47,11 +77,11 @@ services:
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
-    volumes:
-      - ./flink-lib:/opt/flink/usrlib
+        taskmanager.numberOfTaskSlots: 8
+        classloader.resolve-order: parent-first
 
   flink-taskmanager:
-    image: flink:1.18.1-scala_2.12
+    build: ./flink-jobs
     container_name: flink-taskmanager
     depends_on:
       - flink-jobmanager
@@ -59,9 +89,40 @@ services:
     environment:
       FLINK_PROPERTIES: |
         jobmanager.rpc.address: flink-jobmanager
-        taskmanager.numberOfTaskSlots: 2
-    volumes:
-      - ./flink-lib:/opt/flink/usrlib
+        taskmanager.numberOfTaskSlots: 8
+        classloader.resolve-order: parent-first
+
+  # Soumet automatiquement les 2 jobs Flink SQL au démarrage
+  flink-sql-runner:
+    build: ./flink-jobs
+    container_name: flink-sql-runner
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+      - kafka
+      - postgres
+    command: >
+      bash -c "
+        echo 'Attente que Flink REST API soit prêt...' &&
+        until curl -sf http://flink-jobmanager:8081/overview > /dev/null; do
+          echo 'Flink pas encore prêt, retry dans 5s...' && sleep 5;
+        done &&
+        echo 'Flink prêt ✓ — Soumission Job 2 : Transform Silver...' &&
+        /opt/flink/bin/sql-client.sh -f /opt/flink/sql/02_transform_silver.sql &&
+        echo 'Job 2 soumis ✓' &&
+        echo 'Attente que Job 2 soit RUNNING...' &&
+        until [ \"\$(curl -sf http://flink-jobmanager:8081/jobs/overview | grep -o '\"RUNNING\"' | wc -l)\" -gt 0 ]; do
+          echo 'Job 2 pas encore RUNNING, attente 5s...' && sleep 5;
+        done &&
+        echo 'Job 2 RUNNING ✓ — Soumission Job 3 : Aggregate Gold...' &&
+        sleep 5 &&
+        /opt/flink/bin/sql-client.sh -f /opt/flink/sql/03_aggregate_gold.sql &&
+        echo 'Job 3 soumis ✓ — Pipeline Bronze→Silver→Gold complet !'
+      "
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+    restart: on-failure
 
   postgres:
     image: postgres:15-alpine
@@ -74,6 +135,7 @@ services:
       POSTGRES_PASSWORD: gold_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
 
   airflow:
     image: apache/airflow:2.8.0
@@ -84,7 +146,12 @@ services:
       - "8080:8080"
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
     command: standalone
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow_data:/opt/airflow
 
 volumes:
   postgres_data:
+  airflow_data:

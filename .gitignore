@@ -26,6 +26,12 @@ airflow/*.pid
 .DS_Store
 Thumbs.db
 
-# Kafka / Flink temp files (si jamais)
+# Kafka / Flink temp files
 *.tmp
 *.checkpoint
+
+# JARs connecteurs Flink (trop lourds pour git, se téléchargent via PowerShell)
+flink-jobs/lib/
+
+# Secrets
+.env
