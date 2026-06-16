@@ -120,30 +120,53 @@ def check_aggregate_job(**context):
 def monitor_jobs(**context):
     """
     Interroge l'API Flink toutes les 60s pendant 5 min.
-    Lève une exception si un job n'est plus RUNNING.
+    Lève une exception si un job récemment RUNNING passe en FAILED.
+    Les anciens jobs FAILED/CANCELED (historique) sont ignorés.
     """
     print("[INFO] Surveillance des jobs Flink pendant 5 minutes...")
-    end_time = time.time() + 300  # 5 minutes
+    end_time     = time.time() + 300   # 5 minutes
+    now_ms       = time.time() * 1000
+    # Snapshot des jobs RUNNING au démarrage du monitoring
+    initial_running_ids: set = set()
+
+    try:
+        r = requests.get(f"{FLINK_API}/jobs/overview", timeout=5)
+        r.raise_for_status()
+        initial_running_ids = {
+            j["jid"] for j in r.json().get("jobs", [])
+            if j["state"] == "RUNNING"
+        }
+        print(f"[Monitor] {len(initial_running_ids)} jobs RUNNING au démarrage ✓")
+    except Exception as e:
+        print(f"[WARN] Snapshot initial impossible : {e}")
 
     while time.time() < end_time:
+        time.sleep(60)
         try:
             r = requests.get(f"{FLINK_API}/jobs/overview", timeout=5)
             r.raise_for_status()
-            jobs = r.json().get("jobs", [])
+            jobs    = r.json().get("jobs", [])
+            running = {j["jid"] for j in jobs if j["state"] == "RUNNING"}
 
-            running = [j for j in jobs if j["state"] == "RUNNING"]
-            failed  = [j for j in jobs if j["state"] in ("FAILED", "CANCELED")]
+            # Jobs qui étaient RUNNING au départ et ne le sont plus
+            lost = initial_running_ids - running
+            still_running = initial_running_ids & running
 
-            print(f"[Monitor] Jobs RUNNING : {len(running)} | "
-                  f"échoués/annulés : {len(failed)}")
+            print(f"[Monitor] RUNNING : {len(running)} total | "
+                  f"{len(still_running)}/{len(initial_running_ids)} jobs surveillés encore actifs")
 
-            for j in failed:
-                raise Exception(f"Job {j['name']} en état {j['state']} !")
+            if lost:
+                lost_names = [
+                    j["name"] for j in jobs
+                    if j["jid"] in lost and j["state"] in ("FAILED", "CANCELED")
+                ]
+                if lost_names:
+                    raise Exception(
+                        f"Job(s) tombé(s) en erreur : {', '.join(lost_names)}"
+                    )
 
         except requests.RequestException as e:
             print(f"[WARN] Impossible de joindre Flink : {e}")
-
-        time.sleep(60)
 
     print("[OK] Surveillance terminée — pipeline stable ✓")
 

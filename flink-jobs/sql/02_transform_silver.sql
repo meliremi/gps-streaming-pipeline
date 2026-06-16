@@ -39,7 +39,7 @@ CREATE TABLE raw_events (
 
 
 -- =========================
--- DESTINATION : SILVER EVENTS (Kafka)
+-- DESTINATION 1 : SILVER EVENTS (Kafka)
 -- ts exclu : le job Gold le recompute depuis event_time
 -- =========================
 
@@ -61,6 +61,31 @@ CREATE TABLE silver_events (
 ) WITH (
     'connector'                    = 'kafka',
     'topic'                        = 'silver_events',
+    'properties.bootstrap.servers' = 'kafka:29092',
+    'format'                       = 'json'
+);
+
+
+-- =========================
+-- DESTINATION 2 : LATE EVENTS (Kafka side output — DAT section 7.2)
+-- Événements arrivés > 30s après leur event_time
+-- =========================
+
+DROP TABLE IF EXISTS late_events_sink;
+
+CREATE TABLE late_events_sink (
+    event_id       STRING,
+    event_time     BIGINT,
+    icao24         STRING,
+    callsign       STRING,
+    origin_country STRING,
+    longitude      DOUBLE,
+    latitude       DOUBLE,
+    delay_seconds  BIGINT,
+    detected_at    TIMESTAMP(3)
+) WITH (
+    'connector'                    = 'kafka',
+    'topic'                        = 'late_events',
     'properties.bootstrap.servers' = 'kafka:29092',
     'format'                       = 'json'
 );
@@ -94,4 +119,25 @@ FROM raw_events
 WHERE latitude      IS NOT NULL
   AND longitude     IS NOT NULL
   AND baro_altitude >= 0
-  AND velocity      <= 330
+  AND velocity      <= 330;
+
+
+-- =========================
+-- SIDE OUTPUT : Late Events
+-- Détection : temps de traitement dépasse event_time de > 30s
+-- TIMESTAMPDIFF(SECOND, ts, PROCTIME()) compare event time vs processing time
+-- =========================
+
+INSERT INTO late_events_sink
+SELECT
+    event_id,
+    event_time,
+    icao24,
+    TRIM(callsign)                                       AS callsign,
+    origin_country,
+    longitude,
+    latitude,
+    TIMESTAMPDIFF(SECOND, ts, PROCTIME())                AS delay_seconds,
+    CAST(PROCTIME() AS TIMESTAMP(3))                     AS detected_at
+FROM raw_events
+WHERE TIMESTAMPDIFF(SECOND, ts, PROCTIME()) > 30

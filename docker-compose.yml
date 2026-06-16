@@ -147,6 +147,7 @@ services:
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      _PIP_ADDITIONAL_REQUIREMENTS: "kafka-python==2.0.2 psycopg2-binary requests"
     command: standalone
     volumes:
       - ./airflow/dags:/opt/airflow/dags

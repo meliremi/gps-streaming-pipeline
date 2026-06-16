@@ -132,13 +132,22 @@ COUNTRIES = ["Germany", "France", "Spain", "Italy", "Netherlands",
 CALLSIGNS = ["DLH", "AFR", "IBE", "BAW", "KLM", "EZY", "VLG", "THY", "SWR", "TAP"]
 
 def fetch_fake():
+    """
+    Génère 10 événements GPS simulés.
+    ~10% des événements ont un event_time 60-120s dans le passé
+    pour simuler des late events (DAT section 7.2).
+    """
     events = []
-    for _ in range(10):
+    now = int(time.time())
+    for i in range(10):
         icao24 = uuid.uuid4().hex[:6]
+        # 1 événement sur 10 est un late event (delay 60-120s)
+        is_late = (i == 9)
+        event_time = now - random.randint(60, 120) if is_late else now
         event = {
             "event_id":       str(uuid.uuid4()),
-            "event_time":     int(time.time()),
-            "source":         "faker",
+            "event_time":     event_time,
+            "source":         "faker_late" if is_late else "faker",
             "icao24":         icao24,
             "callsign":       f"{random.choice(CALLSIGNS)}{random.randint(100, 999)}",
             "origin_country": random.choice(COUNTRIES),
