@@ -3,7 +3,7 @@
 Pipeline de traitement temps réel de positions ADS-B d'aéronefs.  
 Données source : [OpenSky Network](https://opensky-network.org/) (ou mode faker intégré).
 
-**Auteurs :**  Remila Mélissa · Benzouaoua Selma — M2 Data Engineering
+**Auteurs :**  Remila Mélissa · Benzouaoua Selma — M2 Data Analytics
 
 ---
 
