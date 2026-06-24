@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env/
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Docker data
+*.log
+docker-data/
+postgres_data/
+
+# Airflow
+airflow/logs/
+airflow/*.pid
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kafka / Flink temp files
+*.tmp
+*.checkpoint
+
+# JARs connecteurs Flink (trop lourds pour git, se téléchargent via PowerShell)
+flink-jobs/lib/
+
+# Secrets
+.env
